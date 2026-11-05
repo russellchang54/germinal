@@ -380,7 +380,7 @@ relax_score_mode: "average"  # or "best"
 <!-- TOC --><a name="af3"></a>
 ### AF3 Configuration
 
-To run AF3 in Singularity, we use 5 fields in the configuration, which are described below:
+The Linux execution path continues to use Singularity:
 
 ```yaml
 af3_repo_path: "/path/to/alphafold3/repo"
@@ -389,6 +389,40 @@ af3_model_dir: "/path/to/alphafold3/weights"
 af3_db_dir: "/path/to/alphafold3/databases"
 msa_db_dir: "/path/to/colabfold/databases"
 ```
+
+On Apple Silicon, `run=vhh_il3_macos` selects the validated native MPS runner
+instead:
+
+```yaml
+af3_execution_backend: "native_mps"
+af3_expected_revision: "8f8ac383afba995f5953182d39a560ffb8bbbfd3"
+af3_repo_path: ".envs/af3-mps-probe/share/af3-src"
+af3_model_dir: ".envs/af3-mps-probe/share/af3-models"
+af3_db_dir: "/Volumes/990Pro/database"
+af3_python_path: ".envs/af3-mps-probe/bin/python"
+af3_tools_bin_dir: ".envs/af3-mps-tools/bin"
+af3_runner_path: "scripts/run_af3_mps.py"
+af3_tokamax_patch_path: "docs/porting/af3_mps_probe/patches/tokamax-0.0.12-mps-f32.patch"
+af3_timeout_seconds: 7200
+```
+
+The Germinal and AF3 Python environments remain separate. The native runner
+requires the pinned AF3 checkout, the reversible Tokamax MPS patch, explicit
+model/database paths, and an available Metal device. It fails rather than
+falling back to CPU. `/Volumes/990Pro/database` is the configured production
+database location.
+
+See `docs/porting/af3_mps_probe/phase2a_configuration.md` and
+`docs/porting/af3_mps_probe/phase2a_report.md` for the native interface,
+acceptance evidence, failure handling, and remaining limitations.
+
+Native AF2/ColabDesign design on JAX MPS is currently experimental and is not
+wired into `run_germinal.py`. A separate Python 3.12 runtime can execute the
+Genuine Germinal design path including gradients and parameter updates, but
+multi-step MPS results are not yet repeatable or numerically equivalent to CPU.
+Phase 2B.1 localized the defect to the JAX-MPS reduction over the beta_strand
+masked sorted diagonal. See `docs/porting/af3_mps_probe/phase2b_report.md` and
+`docs/porting/af3_mps_probe/phase2b1_report.md` before using that path.
 
 <!-- TOC --><a name="protenix"></a>
 ### Protenix Configuration
@@ -512,7 +546,7 @@ During sampling, we typically run antibody generation until there are around 1,0
 
 Please consider that:
 
-- We strongly recommend use of [AF3](https://github.com/google-deepmind/alphafold3) for design filtering as done in the paper, as **filters are only calibrated for AF3 confidence metrics**. We are actively working to add Chai calibrated thresholds for commercial users. Until then, running Germinal with `structure_model: "chai"` and NOT `structure_model: "af3"` should be considered experimental and may have lower passing rates. [Protenix](https://github.com/bytedance/Protenix) (`structure_model: "protenix"`) is also supported as a third structure prediction backend. Since Protenix is an open-source reimplementation of AF3, its confidence metrics may be similar in nature, but filter thresholds have not been independently validated against Protenix outputs and this option should be considered experimental. See the [Protenix Configuration](#protenix) section for setup instructions. Note that the current AF3 implementation assumes singularity for containerization. We are currently working on a Docker compatible wrapper, but if you need to run AF3 with Docker in the meantime, `_run_af3` in `germinal/filters/af3.py` holds the Singularity wrapper which should only need slight tweaks to run with Docker. More details on configuring AF3 are [here](#af3).
+- We strongly recommend use of [AF3](https://github.com/google-deepmind/alphafold3) for design filtering as done in the paper, as **filters are only calibrated for AF3 confidence metrics**. We are actively working to add Chai calibrated thresholds for commercial users. Until then, running Germinal with `structure_model: "chai"` and NOT `structure_model: "af3"` should be considered experimental and may have lower passing rates. [Protenix](https://github.com/bytedance/Protenix) (`structure_model: "protenix"`) is also supported as a third structure prediction backend. Since Protenix is an open-source reimplementation of AF3, its confidence metrics may be similar in nature, but filter thresholds have not been independently validated against Protenix outputs and this option should be considered experimental. See the [Protenix Configuration](#protenix) section for setup instructions. AF3 uses Singularity on Linux and the validated native MPS runner on Apple Silicon. More details on configuring AF3 are [here](#af3).
 - While nanobody design is fully functional and validated experimentally, the configs and filters for scFvs remain preliminary; this functionality should therefore still be regarded as experimental.
 - As recommended in the preprint, we suggest performing a small parameter sweep before launching full sampling runs. This is especially important when working with a new target or selecting a new epitope. In `configs/run/vhh_pdl1.yaml` and `configs/run/vhh_il3.yaml`, we provide the parameters that we used for PD-L1 and IL3 nanobody generations in the pre-print. We also include the filters used for these runs under `configs/filter/initial/` and `configs/filter/final/`. In `configs/run/vhh.yaml` and `configs/run/scfv.yaml` we provide a set of reasonable default parameters that we used as a starting point for parameter exploration and sweep experiments (see below **Important Notes and Tips for Design** for more details). One important distinction is that the structure model in the default nanobody configuration is `chai` instead of `af3` in order to allow users to run the pipeline with no additional setup. Note that final sampling runs in the preprint all used slightly modified parameters. Parameters can be configured from the command line. For example, you can set `weights_beta` and `weights_plddt` with the following command:
 

@@ -188,10 +188,12 @@ def get_jax_device():
 
     try:
         devices = jax.devices()
-        gpu_devices = [d for d in devices if d.platform == "gpu"]
-        if gpu_devices:
-            print(f"JAX GPU devices available: {gpu_devices}")
-            return gpu_devices
+        accelerated_devices = [
+            d for d in devices if d.platform in {"gpu", "mps"}
+        ]
+        if accelerated_devices:
+            print(f"JAX accelerated devices available: {accelerated_devices}")
+            return accelerated_devices
         else:
             raise ValueError("No JAX GPU devices found")
     except Exception:

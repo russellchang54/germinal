@@ -2,12 +2,19 @@
 Run Germinal for Antibody design.
 """
 
+import os
+import sys
 import time
 from omegaconf import DictConfig
 import hydra
 import pyrosetta as pr
 import numpy as np
 import torch
+
+if sys.platform == "darwin" and os.environ.get("JAX_PLATFORMS") == "mps":
+    from scripts.af2_mps_compat import configure_jax
+
+    configure_jax("mps")
 
 from germinal.design.design import germinal_design
 from germinal.filters import filter_utils, redesign
@@ -152,6 +159,7 @@ def main(cfg: DictConfig):
                 target_len,
                 select_mode=select_mode,
                 af3_seed_size=3,  # fixed for initial filters — not user-configurable
+                seed=seed,
             )
         )
 
@@ -182,6 +190,7 @@ def main(cfg: DictConfig):
             trajectory_pdb_af=trajectory_pdb_af,
             run_settings=run_settings,
             atom_distance_cutoff=run_settings["atom_distance_cutoff"],
+            seed=seed,
         )
 
         if not abmpnn_success:
@@ -213,6 +222,7 @@ def main(cfg: DictConfig):
                         multi_relax=multi_relax,
                         select_mode=select_mode,
                         af3_seed_size=run_settings.get("num_af3_seed", 5),
+                        seed=seed,
                     )
                 )
                 # save trajectory

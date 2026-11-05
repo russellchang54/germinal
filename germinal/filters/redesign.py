@@ -8,9 +8,14 @@ Attribution:
 """
 
 import os
+import shutil
 import tempfile
 import multiprocessing as mp
 import pickle
+import json
+import subprocess
+import sys
+from pathlib import Path
 from typing import Dict, List, Any, Tuple
 from germinal.utils.utils import hotspot_residues, clear_memory, get_sequence_from_pdb
 from colabdesign.mpnn import mk_mpnn_model
@@ -24,6 +29,7 @@ def abmpnn_design(
     run_settings: Dict[str, Any],
     target_chain: str = "A",
     binder_chain: str = "B",
+    seed: int | None = None,
 ) -> Dict[str, Any]:
     """
     Generate redesigned sequences using AbMPNN for a given PDB structure.
@@ -42,6 +48,7 @@ def abmpnn_design(
         backbone_noise=run_settings["backbone_noise"],
         model_name=run_settings["model_path"],
         weights=run_settings["mpnn_weights"],
+        seed=seed,
     )
 
     # Determine which residues to fix during redesign
@@ -58,7 +65,6 @@ def abmpnn_design(
         fix_pos=fixed_positions,
         rm_aa=run_settings["omit_AAs"],
     )
-
     # Sample redesigned sequences
     abmpnn_sequences = abmpnn_model.sample(
         temperature=run_settings["sampling_temp"], num=1, batch=run_settings["num_seqs"]
@@ -78,6 +84,7 @@ def abmpnn_worker(
     trajectory_interface_residues: str,
     run_settings: Dict[str, Any],
     output_path: str,
+    seed: int | None = None,
 ) -> None:
     """
     Worker function for AbMPNN sequence generation in multiprocessing.
@@ -102,6 +109,7 @@ def abmpnn_worker(
             run_settings,
             target_chain = target_chain,
             binder_chain = binder_chain,
+            seed=seed,
         )
         with open(output_path, "wb") as f:
             pickle.dump(result, f)
@@ -118,6 +126,21 @@ def abmpnn_worker(
         raise
 
 
+def _abmpnn_output_is_finite(output: Dict[str, Any]) -> bool:
+    """Validate the raw model tensors before candidate selection."""
+    import numpy as np
+
+    if not output or "seq" not in output or "score" not in output:
+        return False
+    logits = output.get("logits")
+    if logits is None:
+        return False
+    return bool(
+        np.isfinite(np.asarray(logits)).all()
+        and np.isfinite(np.asarray(output["score"])).all()
+    )
+
+
 def get_abmpnn_sequences(
     trajectory_pdb_af: str,
     run_settings: Dict[str, Any],
@@ -125,6 +148,7 @@ def get_abmpnn_sequences(
     atom_distance_cutoff: float = 3.0,
     target_chain: str = "A",
     binder_chain: str = "B",
+    seed: int | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Generate AbMPNN redesigned sequences for a given trajectory.
@@ -173,64 +197,229 @@ def get_abmpnn_sequences(
 
     residues_to_fix = ",".join(residues_to_fix)
 
-    # Run MPNN in a separate process to avoid memory issues
-    with tempfile.NamedTemporaryFile(delete=False) as tf:
-        output_path = tf.name
+    # Run MPNN in a dedicated interpreter. A multiprocessing child still
+    # re-imports run_germinal.py and can inherit an AF2-contaminated MPS
+    # execution state. A dedicated process made the intermittent all-NaN logits
+    # much rarer but did not eliminate them, so invalid numerical output is
+    # rejected and the same seeded computation is repeated from a fresh process.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as settings_file:
+        json.dump(run_settings, settings_file)
+        settings_path = settings_file.name
 
-    proc = mp.Process(
-        target=abmpnn_worker,
-        args=(
-            trajectory_pdb_af,
-            target_chain,
-            binder_chain,
-            residues_to_fix,
-            run_settings,
-            output_path,
-        ),
+    repo_root = Path(__file__).resolve().parents[2]
+    worker_script = repo_root / "scripts" / "run_abmpnn_worker.py"
+    configured_python = run_settings.get("abmpnn_python_path")
+    if configured_python:
+        worker_python = Path(configured_python).expanduser().absolute()
+        if not worker_python.is_file() or not os.access(worker_python, os.X_OK):
+            raise RuntimeError(
+                "Configured AbMPNN interpreter is not executable: "
+                f"{worker_python}"
+            )
+        expected_prefix = worker_python.parent.parent.resolve()
+    else:
+        worker_python = Path(sys.executable)
+        expected_prefix = None
+    expected_jax_mps_version = run_settings.get(
+        "abmpnn_expected_jax_mps_version"
     )
-    proc.start()
-    proc.join()
-
-    # If the child crashed, surface its traceback loudly and raise so the
-    # caller stops the trajectory. Silently returning [] previously hid
-    # AbMPNN bugs as "no sequences generated".
-    if proc.exitcode != 0:
-        err_path = f"{output_path}.err"
-        traceback_text = ""
-        if os.path.exists(err_path):
-            try:
-                with open(err_path) as fh:
-                    traceback_text = fh.read()
-                os.unlink(err_path)
-            except Exception:
-                pass
-        if os.path.exists(output_path):
-            os.unlink(output_path)
-        msg = (
-            f"\n{'=' * 78}\n"
-            f"[ABMPNN ERROR] worker process exited non-zero "
-            f"(exitcode={proc.exitcode}) for trajectory_pdb={trajectory_pdb_af}\n"
-            f"{'=' * 78}\n"
-            f"{traceback_text or '(no traceback captured — child may have died via signal)'}"
-            f"{'=' * 78}\n"
+    command = [
+        str(worker_python),
+        "-u",
+        str(worker_script),
+        "--pdb",
+        str(Path(trajectory_pdb_af).resolve()),
+        "--settings-json",
+        settings_path,
+        "--fixed-positions",
+        residues_to_fix,
+        "--target-chain",
+        target_chain,
+        "--binder-chain",
+        binder_chain,
+        "--seed",
+        str(seed),
+    ]
+    if expected_jax_mps_version:
+        command.extend(
+            [
+                "--expected-jax-mps-version",
+                str(expected_jax_mps_version),
+            ]
         )
-        print(msg, flush=True)
-        raise RuntimeError(
-            f"abmpnn_worker failed (exitcode={proc.exitcode}); see traceback above."
-        )
+    if expected_prefix is not None:
+        command.extend(["--expected-prefix", str(expected_prefix)])
 
-    # Read result from file
+    env = os.environ.copy()
+    pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        str(repo_root)
+        if not pythonpath
+        else str(repo_root) + os.pathsep + pythonpath
+    )
+    env.pop("PYTHONHOME", None)
+    if expected_prefix is not None:
+        env.pop("CONDA_PREFIX", None)
+        env["VIRTUAL_ENV"] = str(expected_prefix)
+        env["PATH"] = (
+            str(expected_prefix / "bin")
+            + os.pathsep
+            + env.get("PATH", "")
+        )
+    preserve_worker_logs = bool(
+        run_settings.get("abmpnn_preserve_worker_logs", False)
+    )
+    worker_artifact_root = None
+    if preserve_worker_logs:
+        configured_artifact_root = run_settings.get(
+            "abmpnn_worker_log_dir"
+        )
+        if configured_artifact_root:
+            worker_artifact_root = Path(configured_artifact_root).expanduser()
+        else:
+            worker_artifact_root = (
+                Path(trajectory_pdb_af).resolve().parent
+                / "abmpnn_workers"
+                / Path(trajectory_pdb_af).stem
+            )
+        worker_artifact_root.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(
+            settings_path,
+            worker_artifact_root / "run_settings.json",
+        )
+    max_trials = int(os.environ.get("GERMINAL_ABMPNN_MAX_TRIALS", "5"))
+    if max_trials < 1:
+        raise ValueError("GERMINAL_ABMPNN_MAX_TRIALS must be >= 1")
+    abmpnn_trajectories = None
     try:
-        with open(output_path, "rb") as f:
-            abmpnn_trajectories = pickle.load(f)
-        os.unlink(output_path)
-    except Exception as e:
-        if os.path.exists(output_path):
-            os.unlink(output_path)
-        raise RuntimeError(
-            f"abmpnn_worker exited 0 but produced unreadable pickle at "
-            f"{output_path}: {e}"
-        )
+        for trial in range(1, max_trials + 1):
+            with tempfile.NamedTemporaryFile(delete=False) as tf:
+                output_path = tf.name
+            if worker_artifact_root is None:
+                worker_log_path = f"{output_path}.log"
+                identity_path = f"{output_path}.runtime.json"
+            else:
+                worker_log_path = str(
+                    worker_artifact_root / f"trial_{trial:02d}.log"
+                )
+                identity_path = str(
+                    worker_artifact_root
+                    / f"trial_{trial:02d}.runtime.json"
+                )
+            trial_command = [
+                *command,
+                "--output-pickle",
+                output_path,
+                "--runtime-identity",
+                identity_path,
+            ]
+            with open(worker_log_path, "w") as worker_log:
+                proc = subprocess.run(
+                    trial_command,
+                    env=env,
+                    stdout=worker_log,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    check=False,
+                )
+
+            if proc.returncode != 0:
+                traceback_text = ""
+                if os.path.exists(worker_log_path):
+                    with open(worker_log_path) as fh:
+                        traceback_text = fh.read()[-8000:]
+                if os.path.exists(output_path):
+                    os.unlink(output_path)
+                msg = (
+                    f"\n{'=' * 78}\n"
+                    f"[ABMPNN ERROR] worker process exited non-zero "
+                    f"(exitcode={proc.returncode}) for "
+                    f"trajectory_pdb={trajectory_pdb_af}\n"
+                    f"{'=' * 78}\n"
+                    f"{traceback_text}"
+                    f"{'=' * 78}\n"
+                )
+                print(msg, flush=True)
+                raise RuntimeError(
+                    f"abmpnn_worker failed (exitcode={proc.returncode}); "
+                    f"see traceback above."
+                )
+
+            if expected_jax_mps_version or expected_prefix is not None:
+                if not os.path.isfile(identity_path):
+                    raise RuntimeError(
+                        "AbMPNN worker did not emit its runtime identity "
+                        f"at {identity_path}"
+                    )
+                with open(identity_path) as handle:
+                    identity = json.load(handle)
+                if (
+                    expected_jax_mps_version
+                    and identity.get("jax_mps_version")
+                    != expected_jax_mps_version
+                ):
+                    raise RuntimeError(
+                        "AbMPNN worker imported the wrong jax-mps version: "
+                        f"expected {expected_jax_mps_version}, "
+                        f"got {identity.get('jax_mps_version')}"
+                    )
+                if (
+                    expected_prefix is not None
+                    and identity.get("sys_prefix")
+                    != str(expected_prefix)
+                ):
+                    raise RuntimeError(
+                        "AbMPNN worker imported from the wrong environment: "
+                        f"expected {expected_prefix}, "
+                        f"got {identity.get('sys_prefix')}"
+                    )
+                if identity.get("jax_default_backend") != "mps":
+                    raise RuntimeError(
+                        "AbMPNN worker did not select MPS: "
+                        f"{identity.get('jax_default_backend')}"
+                    )
+
+            try:
+                with open(output_path, "rb") as f:
+                    candidate = pickle.load(f)
+                os.unlink(output_path)
+            except Exception as exc:
+                if os.path.exists(output_path):
+                    os.unlink(output_path)
+                raise RuntimeError(
+                    "abmpnn_worker exited 0 but produced unreadable pickle "
+                    f"at {output_path}: {exc}"
+                ) from exc
+
+            if _abmpnn_output_is_finite(candidate):
+                abmpnn_trajectories = candidate
+                if not preserve_worker_logs:
+                    os.unlink(worker_log_path)
+                    if os.path.exists(identity_path):
+                        os.unlink(identity_path)
+                break
+
+            print(
+                "AbMPNN produced non-finite logits or scores on Apple MPS; "
+                f"discarding trial {trial}/{max_trials} and retrying with the "
+                "same seed.",
+                flush=True,
+            )
+            if not preserve_worker_logs:
+                os.unlink(worker_log_path)
+                if os.path.exists(identity_path):
+                    os.unlink(identity_path)
+        else:
+            raise RuntimeError(
+                "AbMPNN produced non-finite logits or scores after "
+                f"{max_trials} fresh-process trials; refusing to emit "
+                "unvalidated sequences."
+            )
+    finally:
+        if os.path.exists(settings_path):
+            os.unlink(settings_path)
 
     # Process and deduplicate MPNN sequences
     if not abmpnn_trajectories or "seq" not in abmpnn_trajectories:
@@ -266,6 +455,7 @@ def run_abmpnn_redesign_pipeline(
     trajectory_pdb_af: str,
     run_settings: Dict[str, Any],
     atom_distance_cutoff: float = 3.0,
+    seed: int | None = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """
     Complete AbMPNN redesign pipeline for a trajectory.
@@ -291,6 +481,7 @@ def run_abmpnn_redesign_pipeline(
             run_settings=run_settings,
             cdr_positions=run_settings["cdr_positions"],
             atom_distance_cutoff=atom_distance_cutoff,
+            seed=seed,
         )
 
         success = len(abmpnn_sequences) > 0
