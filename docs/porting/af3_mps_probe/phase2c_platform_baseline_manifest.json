@@ -1,0 +1,402 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_type": "apple_silicon_germinal_platform_baseline",
+  "created_at_utc": "2026-11-05T14:22:11Z",
+  "closure_state": "CLOSED-PASS",
+  "immutable": true,
+  "platform_validation_only": true,
+  "antibody_design_success_claim": false,
+  "authoritative_phase": "2C",
+  "formal_acceptance": {
+    "phase_2c_decision": "PASS",
+    "accepted_at_user_statement": "2026-11-05",
+    "workstream": "native_apple_silicon_germinal_platform_validation",
+    "pull_request_url": "https://github.com/russellchang54/germinal/pull/1",
+    "pull_request_state_at_closure": "open",
+    "closure_report": {
+      "path": "docs/porting/af3_mps_probe/phase2c_platform_closure_report.md",
+      "sha256": "bea3d44602ef1778b705e462f9b093f484558e6748d7bd184fd904050a5cc429"
+    },
+    "evidence_index": {
+      "path": "docs/porting/af3_mps_probe/phase2b3_phase2c_evidence_index.md",
+      "sha256": "cf00e46ffa544e792b772ef5ae8fbc9a76f0b25bfd4e287b20673f753e6946ca"
+    }
+  },
+  "source_baseline": {
+    "accepted_execution_git_commit": "1e1c1a5b79884ae45abae030c9df90d9423a990a",
+    "accepted_execution_working_tree_snapshot": "hashes_below",
+    "validation_code_commit": "a68e9b121eeeea9530417029a7505b89309d52b7",
+    "closure_branch": "apple-silicon-production",
+    "production_source_hashes_unchanged_at_closure": true,
+    "source_hashes": {
+      "run_germinal.py": "83ac56a1b77da7452ce2f4a7d7c431efe323d7c2bdc12eba6cb1abbac235d0ab",
+      "germinal/design/design.py": "e2edb4dd4a612a5bda79090cf925f7b7b2b5fd222c7c5a273679d3cd605fe8b5",
+      "germinal/filters/af3.py": "8f415c690323564c316ef42ea31b681f20938e88424a8fdb272a800bfdbef129",
+      "germinal/filters/filter_utils.py": "4077ee71a577b29641f633231de73d5dd934665523ac29e21c3063bf6e325ea1",
+      "germinal/filters/pyrosetta_utils.py": "8e727b7877d30c0cd061a30ab7b444acbe01f4079dcf0a3b8103bb2cb00cdb3d",
+      "germinal/filters/redesign.py": "e817fccf56b0f693248bb1ff39003c980ca906133ee3fdfabbad8439bd1fa399",
+      "germinal/utils/utils.py": "1122611395c03971f8355fa30fdda7689e89607a488739bb305974e2ec8a6019",
+      "scripts/af2_mps_compat.py": "815a47c79ed70be7dd7af217790ec98dc06fa567a06159592ac4f409922d3780",
+      "scripts/run_af3_mps.py": "d4d76013b634a05da1073d377833a82b9bebae7fd4a203f2e4f108b9fa21e0bc",
+      "scripts/run_abmpnn_worker.py": "5c8ff9df6892a8651c13c4cfc83f6fa304ba1af4b3d6991911a3ed83805d52a5"
+    },
+    "scientific_config_hashes": {
+      "configs/config.yaml": "c0b402d486bfef06f4b3e4f82133004e85c91d14a80dae03a46333340802a3c3",
+      "configs/run/vhh_il3.yaml": "26d854d99fd3272a9ea36c73db539bc5122a36fcd36715c6882ee4eeb22af8f5",
+      "configs/target/il3.yaml": "9e07188de90e27c64d2ae13cca16184d98c764b87a0ddb4650947b9efbaeba20",
+      "configs/filter/initial/vhh_il3.yaml": "074d3b31cf4b6e526c70348220f8d3bd68a4679aa0f29775da03166289796c1e",
+      "configs/filter/final/vhh_il3.yaml": "0f4050b685185369c7fd6f9d3bd7b947dda0810398b9bcebb65f444b72a12932"
+    },
+    "macos_runner_config_phase_2c_snapshot": {
+      "path": "configs/run/vhh_il3_macos.yaml",
+      "phase_2c_effective_sha256": "b00fbef276404cbd24dffa95585481bc5e31d674c4026bf7342a5d1e99862d2c",
+      "closure_sha256_after_database_path_update": "2a7bf20343d16c78493b955a3be6c045b82446956d1996ce8d087911f3f2daaf",
+      "scientific_settings_changed": false,
+      "change": "af3_db_dir external location update only"
+    }
+  },
+  "runtime_baseline": {
+    "architecture": "arm64",
+    "system": "Darwin",
+    "python_version": "3.12.12",
+    "jax_version": "0.10.2",
+    "jaxlib_version": "0.10.2",
+    "runtime_split": {
+      "af2": {
+        "jax_mps_version": "0.10.9",
+        "interpreter_prefix": ".envs/af2-mps-0109",
+        "device": "MPS:0",
+        "plugin_sha256": "d5845ce1184e6b26f838af9f97b5fc94997b77cd7f4fdafc4f351d963bc2055a"
+      },
+      "af3": {
+        "jax_mps_version": "0.10.9",
+        "interpreter_prefix": ".envs/af3-mps-probe",
+        "device": "MPS:0",
+        "plugin_sha256": "d5845ce1184e6b26f838af9f97b5fc94997b77cd7f4fdafc4f351d963bc2055a",
+        "source_revision": "8f8ac383afba995f5953182d39a560ffb8bbbfd3"
+      },
+      "abmpnn": {
+        "jax_mps_version": "0.10.11",
+        "interpreter_prefix": ".envs/abmpnn-mps-0111",
+        "device": "MPS:0",
+        "plugin_sha256": "11c09943d4d969ef8114b67d2e16ca7e284a157e917da882e461aa38a4bd9685"
+      },
+      "pyrosetta_dssp_dalphaball": {
+        "runtime": "native_arm64_cpu",
+        "seed_propagation_required": true
+      }
+    },
+    "process_boundaries": [
+      "No live JAX arrays cross component boundaries.",
+      "No shared backend state or MPS runtime object crosses component boundaries.",
+      "AF2, AF3, and AbMPNN use separate interpreter prefixes.",
+      "AbMPNN rejects non-finite logits and scores before candidate selection.",
+      "AbMPNN same-seed fresh-process retry is bounded to five trials and fails closed."
+    ]
+  },
+  "scientific_baseline": {
+    "trajectory_seed": 1791095845,
+    "target": {
+      "name": "il3",
+      "target_chain": "A",
+      "binder_chain": "B",
+      "hotspots": "A23,A25,A26,A31,A40,A104"
+    },
+    "design_type": "nanobody",
+    "cdr_lengths": [11, 8, 18],
+    "framework_lengths": [25, 17, 38, 14],
+    "af2_schedule": {
+      "logits_steps": 60,
+      "softmax_steps": 35,
+      "pssm_search_steps": 10,
+      "models": 5,
+      "recycles": 3,
+      "recycle_mode": "last"
+    },
+    "loss_weights": {
+      "plddt": 1.0,
+      "i_plddt": 1.0,
+      "pae_intra": 0.1,
+      "pae_inter": 0.3,
+      "iptm": 0.7,
+      "con_intra": 0.1,
+      "con_inter": 0.2,
+      "rg": 0.1,
+      "helix": 0.1,
+      "beta": 0.1,
+      "dgram_cce": 0.01
+    },
+    "optimizer": {
+      "type": "sgd",
+      "learning_rate": 0.1,
+      "gradient_merge_method": "pcgrad",
+      "normalize_gradient": true,
+      "linear_lr_annealing": true,
+      "minimum_lr_scale": 0.25
+    },
+    "abmpnn": {
+      "sampling_temperature": 0.2,
+      "batch_size": 40,
+      "maximum_selected_sequences": 5,
+      "backbone_noise": 0.0,
+      "fix_interface": true,
+      "weights": "abmpnn",
+      "nonfinite_output_policy": "reject_and_fail_closed",
+      "fresh_process_retry_trials_maximum": 5
+    },
+    "af3": {
+      "structure_model": "af3",
+      "revision": "8f8ac383afba995f5953182d39a560ffb8bbbfd3",
+      "num_diffusion_samples": 5,
+      "num_recycles": 10,
+      "sample_selection": "worst",
+      "run_data_pipeline": true,
+      "timeout_seconds": 7200,
+      "msa_mode": "target",
+      "use_metagenomic_db": false,
+      "cache_binder_msa": false
+    },
+    "pyrosetta": {
+      "multi_relax": false,
+      "relaxations": 5,
+      "relax_score_mode": "average",
+      "seed_propagation": "trajectory_seed"
+    },
+    "initial_filters": {
+      "clashes": {"value": 1, "operator": "<"},
+      "binder_near_hotspot": {"value": true, "operator": "=="},
+      "cdr3_hotspot_contacts": {"value": 0, "operator": ">"},
+      "percent_interface_cdr": {"value": 0.5, "operator": ">="},
+      "interface_shape_comp": {"value": 0.6, "operator": ">="}
+    },
+    "final_filters": {
+      "clashes": {"value": 1, "operator": "<"},
+      "sc_rmsd": {"value": 6.0, "operator": "<"},
+      "binder_near_hotspot": {"value": true, "operator": "=="},
+      "cdr3_hotspot_contacts": {"value": 1, "operator": ">="},
+      "percent_interface_cdr": {"value": 0.5, "operator": ">="},
+      "interface_shape_comp": {"value": 0.6, "operator": ">="},
+      "interface_hbonds": {"value": 3, "operator": ">="},
+      "surface_hydrophobicity": {"value": 0.4, "operator": "<="},
+      "interface_hydrophobicity": {"value": 45, "operator": ">="},
+      "pdockq2": {"value": 0.23, "operator": ">"},
+      "external_plddt": {"value": 0.8, "operator": ">="},
+      "external_iptm": {"value": 0.75, "operator": ">="},
+      "external_ptm": {"value": 0.8, "operator": ">="},
+      "external_pae": {"value": 8, "operator": "<"}
+    },
+    "af2_quality_baseline": {
+      "final_sequence": "QVQLVESGGGLVQPGGSLRLSCAASQRLKPWWFYEVLGWFRQAPGQGLEAVAAINAQSVVKYYADSVKGRFTISRDNSKNTLQLQMNSLRAEDTAVYYCAWGFGTVDWCITKNNFHDWGQGTLVTMTSRGR",
+      "plddt": 0.8867384791374207,
+      "i_ptm": 0.742160439491272,
+      "i_pae": 0.21023310720920563
+    }
+  },
+  "checkpoints": [
+    {
+      "path": ".envs/germinal-mps-design/share/af2-params/extracted/params_model_1_multimer_v3.npz",
+      "sha256": "611da8fc7478928f68de12e8b226260ef1f4ce62bcc29b008572e52f4f212959"
+    },
+    {
+      "path": ".envs/germinal-mps-design/share/af2-params/extracted/params_model_2_multimer_v3.npz",
+      "sha256": "51362b0844382ae0f5720c59b81dd13a43eea40fbf9995dd2573bdab88865378"
+    },
+    {
+      "path": ".envs/germinal-mps-design/share/af2-params/extracted/params_model_3_multimer_v3.npz",
+      "sha256": "46d9bcad288edc7ad5a6362ee8e5f84307a69712e00e6c36b1ef9daf96ebc9ce"
+    },
+    {
+      "path": ".envs/germinal-mps-design/share/af2-params/extracted/params_model_4_multimer_v3.npz",
+      "sha256": "59bdabd2d69c07fe26b37882d544acbd1b9f89f196828f4220da49e0610b572c"
+    },
+    {
+      "path": ".envs/germinal-mps-design/share/af2-params/extracted/params_model_5_multimer_v3.npz",
+      "sha256": "917742be5a105d6b80f13f1f13f20459f27ec3fdcd34ea088b359f4502d6177f"
+    }
+  ],
+  "inputs": [
+    {
+      "role": "starting_complex",
+      "path": "docs/porting/af3_mps_probe/results/phase2b4/run1/input/il3_11_8_18_nb.pdb",
+      "sha256": "dea93d03be73a033a8d1e2233c711cad4ff43aa41d6c32f5197cf446e774d091"
+    },
+    {
+      "role": "target",
+      "path": "pdbs/il3.pdb",
+      "sha256": "a440472345496c2ae7b5d08cfa085e1a43e6862b9555b1ed93ab8de06e579c0b"
+    },
+    {
+      "role": "binder",
+      "path": "pdbs/nb.pdb",
+      "sha256": "5c81f917b21dfebd091111b3a9ade4bbd484f4983d63271bbd8acb9f2d013c94"
+    }
+  ],
+  "database_baseline": {
+    "phase_2c_authoritative_execution_reference": {
+      "path": "/Volumes/T9/database",
+      "filesystem_at_execution": "exFAT",
+      "status": "retired_after_evidence_preservation",
+      "execution_authoritative": true,
+      "production_ready": true,
+      "readiness_manifest_sha256": "1a74ad9e51f31d2c91cb3ec450000da14b65b5c06c2e047bac759ea6a0e1a1ff",
+      "smoke_test_sha256": "d86f6708589650f973c9bd9dc1ffb4897578b856784bb39d208ed848c8f056dc"
+    },
+    "active_content_reference": {
+      "path": "/Volumes/990Pro/database",
+      "filesystem": "APFS",
+      "status": "active",
+      "real_files_excluding_sidecars_and_ds_store": 195899,
+      "apple_double_sidecars": 0,
+      "mmcif_files": 195859,
+      "manifest_sha256": {
+        ".manifests/phase2b6_database_manifest.json": "1a74ad9e51f31d2c91cb3ec450000da14b65b5c06c2e047bac759ea6a0e1a1ff",
+        ".manifests/phase2b6_database_integrity.json": "7857a0276c73ce4ff0dbbb7d1d3803f9fb511d917dc6d17929480e3eec0d059a",
+        ".manifests/phase2b6_database_readiness.json": "9c956159b5a95b4267544da7d74902d04a5bacf01dbc9d9dc444257356cc65f5",
+        ".manifests/provisioning_status.json": "f863023d25214c1b699c1312dcc476d95f5f8679fc9306a56f7c37c5aea8fd3c"
+      }
+    },
+    "required_file_sizes_bytes": {
+      "bfd-first_non_consensus_sequences.fasta": 18171626364,
+      "mgy_clusters_2022_05.fa": 128579703018,
+      "uniprot_all_2021_04.fa": 108447942931,
+      "uniref90_2022_05.fa": 71821260491,
+      "nt_rna_2023_02_23_clust_seq_id_90_cov_80_rep_seq.fasta": 80977012680,
+      "rnacentral_active_seq_id_90_cov_80_linclust.fasta": 13860314914,
+      "rfam_14_9_clust_seq_id_90_cov_80_rep_seq.fasta": 228433680,
+      "pdb_seqres_2022_09_28.fasta": 232899463
+    },
+    "migration_validation": {
+      "content_equivalence_method": "rsync checksum comparison excluding AppleDouble and DS_Store metadata",
+      "content_checksum_exit_code": 0,
+      "content_differences": 0,
+      "file_tree_differences": 0,
+      "full_production_run_after_migration": false,
+      "scientific_database_content_changed": false
+    }
+  },
+  "authoritative_runs": {
+    "run_count": 2,
+    "execution_policy": "sequential_fresh_processes",
+    "entrypoint": "run_germinal.py",
+    "run1": {
+      "status": "PASS",
+      "exit_code": 0,
+      "wall_seconds": 23949.61,
+      "runtime_text": "6h 38m 38s",
+      "output_directory": "docs/porting/af3_mps_probe/results/phase2c/run1",
+      "af2_records": 105,
+      "abmpnn_sequence_set_sha256": "af247058856a4f3d1151e2a86472ebd4f9ab6f6994c68eef0077b94a6b3a9a40",
+      "af3_invocations": 6,
+      "accepted_candidates": 0,
+      "rejected_candidates": 5,
+      "production_pdbs": 18,
+      "parsed_result": {
+        "path": "docs/porting/af3_mps_probe/phase2c_run1.json",
+        "sha256": "4c3f7098050d0fe634cd4f0bc1c80e79ba629573ead1ac5e5ad92eb003b872f9"
+      }
+    },
+    "run2": {
+      "status": "PASS",
+      "exit_code": 0,
+      "wall_seconds": 24544.64,
+      "runtime_text": "6h 49m 0s",
+      "output_directory": "docs/porting/af3_mps_probe/results/phase2c/run2",
+      "af2_records": 105,
+      "abmpnn_sequence_set_sha256": "af247058856a4f3d1151e2a86472ebd4f9ab6f6994c68eef0077b94a6b3a9a40",
+      "af3_invocations": 6,
+      "accepted_candidates": 0,
+      "rejected_candidates": 5,
+      "production_pdbs": 18,
+      "parsed_result": {
+        "path": "docs/porting/af3_mps_probe/phase2c_run2.json",
+        "sha256": "497528284ec7aa288d4bbf901baf3ef6f0ded03df28dd729282420f408166432"
+      }
+    },
+    "failed_nonproduction_startup_attempt": {
+      "counted_as_production_run": false,
+      "scientific_stage_started": false,
+      "reason": "sandbox could not access Metal",
+      "evidence": {
+        "path": "docs/porting/af3_mps_probe/results/phase2c/run2_failed_startup_metal_unavailable.log",
+        "sha256": "50136b4b71ab8217ca60d78f854d8f304d47878a4b76a2cb0805cc655592395e"
+      }
+    }
+  },
+  "repeatability_baseline": {
+    "status": "PASS",
+    "comparison_policy_frozen_before_run1": true,
+    "numeric_policy": "exact_equality_no_post_hoc_tolerance",
+    "passed_checks": 24,
+    "failed_checks": 0,
+    "primary_comparison": {
+      "path": "docs/porting/af3_mps_probe/phase2c_repeatability_comparison.json",
+      "sha256": "e2485c14e68d8eec04ef9fc13f653de221f5b5e1d77e44b306fffae4345c18d4"
+    },
+    "allowed_normalization": [
+      "run-specific paths",
+      "timing fields",
+      "design_time fields",
+      "documented non-scientific CIF timestamps"
+    ],
+    "never_normalized": [
+      "seed",
+      "scientific configuration",
+      "AF2 records and metrics",
+      "AbMPNN candidates and scores",
+      "AF3 database-derived inputs",
+      "AF3 prediction and relaxed structures",
+      "PyRosetta metrics",
+      "filter decisions",
+      "final PDB hashes"
+    ]
+  },
+  "core_closure_evidence": {
+    "phase_2c_report": {
+      "path": "docs/porting/af3_mps_probe/phase2c_report.md",
+      "sha256": "497e59385954e01d80c5d284848c1ad39c8b540372da341ad9d7c161fa3c8bb0"
+    },
+    "phase_2c_summary": {
+      "path": "docs/porting/af3_mps_probe/phase2c_summary.json",
+      "sha256": "341e2fd09c62d5f6ee860f23dc22f622ac5a6e2d9499e18864e821a65a56114e"
+    },
+    "phase_2c_preflight": {
+      "path": "docs/porting/af3_mps_probe/phase2c_preflight.json",
+      "sha256": "bfa2696ead50c4e346e50baec9bf794d816458d02d528100351c6bdfc26b85a9"
+    },
+    "phase_2c_runtime_manifest": {
+      "path": "docs/porting/af3_mps_probe/phase2c_runtime_manifest.json",
+      "sha256": "e4f84d1b2018fa0e931e5c2018a1a6f01db620617ff5d78a9664d6673fcd0ed4"
+    },
+    "phase_2c_database_manifest": {
+      "path": "docs/porting/af3_mps_probe/phase2c_database_manifest.json",
+      "sha256": "861b57dc52a88dd42eddda05a6b40b55d61891ba21ade27f8f21f116ea9a5f97"
+    },
+    "phase_2c_execution_manifest": {
+      "path": "docs/porting/af3_mps_probe/phase2c_execution_manifest.json",
+      "sha256": "938a4166894baae72b4e6ebf001f18358aee3ebbfb6d2cf6f98f1299c25ae6aa"
+    },
+    "phase_2c_checksum_manifest": {
+      "path": "docs/porting/af3_mps_probe/phase2c_checksums.sha256",
+      "sha256": "0e5231246bcae3bbd76ff3fc287395d4b97eddbf223bf3fbc533b187e938e5a2"
+    },
+    "phase_2b3_through_2b12_reports_and_summaries": "see phase2b3_phase2c_evidence_index.md",
+    "accepted_abmpnn_patch": {
+      "path": "docs/porting/af3_mps_probe/phase2b8_exact_patch.diff",
+      "sha256": "d164b8e9e11a1743cde560e7267e09b457f6a1530e3a4b33809563b57666ce45"
+    }
+  },
+  "unresolved_limitations": [
+    "The exact Metal operator, kernel, or resource-lifetime defect remains unidentified.",
+    "jax-mps 0.10.11 is approved only for AbMPNN, not globally for AF2 or AF3.",
+    "The migrated /Volumes/990Pro/database is content-equivalent but was not rerun as a new production execution.",
+    "Phase 2C validates one frozen VHH/IL3 platform trajectory and does not establish a general antibody-design success claim.",
+    "Zero accepted candidates is a valid unchanged-filter scientific outcome."
+  ],
+  "closure_restrictions": [
+    "Do not alter the accepted source, scientific settings, seed, checkpoints, inputs, schedules, sampling settings, thresholds, or filters without explicit authorization.",
+    "Do not launch another full production run under this closed workstream.",
+    "Do not pursue a new seed or replacement trajectory under this closure.",
+    "Do not globally replace either accepted JAX-MPS version.",
+    "Require a new authorization, preflight, manifest, and success criteria for any future scientific or runtime work."
+  ]
+}
