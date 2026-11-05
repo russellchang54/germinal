@@ -23,14 +23,273 @@ import argparse
 import tempfile
 import os
 import json
+import platform
 import shutil
 import numpy as np
 import pandas as pd
 
+from pathlib import Path
 from typing import Union, List
 from colabfold.colabfold import run_mmseqs2
 from Bio import PDB
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
+
+
+AF3_EXPECTED_REVISION = "8f8ac383afba995f5953182d39a560ffb8bbbfd3"
+AF3_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class AF3ConfigurationError(ValueError):
+    """Raised when the selected AF3 execution backend is incompletely configured."""
+
+
+class AF3ExecutionError(subprocess.CalledProcessError):
+    """AF3 subprocess failure with the complete log location attached."""
+
+    def __init__(self, returncode, cmd, output=None, log_path=None):
+        super().__init__(returncode, cmd, output=output, stderr=output)
+        self.log_path = str(log_path) if log_path is not None else None
+
+    def __str__(self):
+        detail = super().__str__()
+        if self.log_path:
+            return f"{detail}. Full AF3 subprocess log: {self.log_path}"
+        return detail
+
+
+class AF3TimeoutError(subprocess.TimeoutExpired):
+    """AF3 subprocess timeout with the complete log location attached."""
+
+    def __init__(self, cmd, timeout, log_path=None):
+        super().__init__(cmd, timeout)
+        self.log_path = str(log_path) if log_path is not None else None
+
+    def __str__(self):
+        detail = super().__str__()
+        if self.log_path:
+            return f"{detail}. Full AF3 subprocess log: {self.log_path}"
+        return detail
+
+
+def _expanded_path(value: str) -> str:
+    # Preserve the final symlink for virtual-environment interpreters. Resolving
+    # .envs/<name>/bin/python would select the base Python and discard its
+    # site-packages, defeating the separate-environment boundary.
+    return os.path.abspath(os.path.expanduser(value))
+
+
+def _required_setting(run_settings: dict, key: str, backend: str) -> str:
+    value = run_settings.get(key)
+    if value in (None, ""):
+        raise AF3ConfigurationError(
+            f"{key} must be set for AF3 execution backend {backend!r}. "
+            "Use an explicit path rather than a temporary or implicit default."
+        )
+    return _expanded_path(str(value))
+
+
+def _select_execution_backend(
+    run_settings: dict, platform_name: str | None = None
+) -> str:
+    """Resolves auto to Singularity on Linux and native MPS on macOS."""
+    configured = str(run_settings.get("af3_execution_backend", "auto")).lower()
+    current_platform = platform_name or platform.system()
+    if configured == "auto":
+        return "native_mps" if current_platform == "Darwin" else "singularity"
+    if configured not in {"native_mps", "singularity"}:
+        raise AF3ConfigurationError(
+            "af3_execution_backend must be one of: auto, native_mps, singularity; "
+            f"got {configured!r}."
+        )
+    if configured == "native_mps" and current_platform != "Darwin":
+        raise AF3ConfigurationError(
+            "af3_execution_backend='native_mps' is supported only on macOS."
+        )
+    return configured
+
+
+def _tail_file(path: str, max_chars: int = 8000) -> str:
+    try:
+        with open(path, "r", errors="replace") as f:
+            return f.read()[-max_chars:]
+    except OSError:
+        return ""
+
+
+def _terminate_process_group(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, 15)
+        else:
+            process.terminate()
+        process.wait(timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, 9)
+            else:
+                process.kill()
+        except OSError:
+            pass
+
+
+def _run_logged_subprocess(
+    run_cmds: list[str], log_path: str, timeout_seconds: float | None = None
+) -> None:
+    """Runs a subprocess with merged logging, timeout cleanup, and exit propagation."""
+    run_cmds = [os.fspath(command) for command in run_cmds]
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    print(f"Running AF3 subprocess: {' '.join(run_cmds)}")
+    print(f"AF3 subprocess log: {log_path}")
+    with open(log_path, "w", buffering=1) as log_file:
+        log_file.write(f"COMMAND: {json.dumps(run_cmds)}\n")
+        log_file.flush()
+        popen = subprocess.Popen(
+            run_cmds,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=(os.name == "posix"),
+        )
+        try:
+            return_code = popen.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            _terminate_process_group(popen)
+            raise AF3TimeoutError(
+                run_cmds, timeout_seconds, log_path=log_path
+            ) from exc
+
+    if return_code:
+        output = _tail_file(log_path)
+        raise AF3ExecutionError(
+            return_code,
+            run_cmds,
+            output=output,
+            log_path=log_path,
+        )
+
+
+def _native_af3_command(
+    input_path: str, output_dir: str, run_settings: dict
+) -> tuple[list[str], float | None]:
+    """Builds the stable Germinal-to-native-AF3 subprocess contract."""
+    af3_python = _required_setting(run_settings, "af3_python_path", "native_mps")
+    if not os.path.isfile(af3_python):
+        raise AF3ConfigurationError(
+            f"af3_python_path does not point to a file: {af3_python}"
+        )
+
+    runner_path = run_settings.get("af3_runner_path")
+    if runner_path:
+        runner_path = _expanded_path(str(runner_path))
+    else:
+        runner_path = str(AF3_REPO_ROOT / "scripts" / "run_af3_mps.py")
+    if not os.path.isfile(runner_path):
+        raise AF3ConfigurationError(
+            f"Native AF3 runner not found: {runner_path}"
+        )
+
+    run_data_pipeline = bool(run_settings.get("af3_run_data_pipeline", True))
+    db_dir = run_settings.get("af3_db_dir")
+    db_manifest = run_settings.get("af3_database_manifest")
+    if run_data_pipeline and not db_dir and not db_manifest:
+        raise AF3ConfigurationError(
+            "Native AF3 data-pipeline execution requires af3_db_dir or "
+            "af3_database_manifest. Set af3_run_data_pipeline=false only for an "
+            "intentional model-only input."
+        )
+
+    configured = {
+        "af3_expected_revision": run_settings.get(
+            "af3_expected_revision", AF3_EXPECTED_REVISION
+        ),
+        "af3_num_diffusion_samples": int(
+            run_settings.get("af3_num_diffusion_samples", 5)
+        ),
+        "af3_num_recycles": int(run_settings.get("af3_num_recycles", 10)),
+        "af3_timeout_seconds": float(
+            run_settings.get("af3_timeout_seconds", 3600)
+        ),
+    }
+    if configured["af3_num_diffusion_samples"] < 1:
+        raise AF3ConfigurationError("af3_num_diffusion_samples must be >= 1")
+    if configured["af3_num_recycles"] < 1:
+        raise AF3ConfigurationError("af3_num_recycles must be >= 1")
+    if configured["af3_timeout_seconds"] <= 0:
+        raise AF3ConfigurationError("af3_timeout_seconds must be > 0")
+
+    command = [
+        af3_python,
+        runner_path,
+        "--af3-source",
+        _required_setting(run_settings, "af3_repo_path", "native_mps"),
+        "--expected-af3-revision",
+        str(configured["af3_expected_revision"]),
+        "--model-dir",
+        _required_setting(run_settings, "af3_model_dir", "native_mps"),
+        "--tools-bin-dir",
+        _required_setting(run_settings, "af3_tools_bin_dir", "native_mps"),
+        "--tokamax-patch",
+        _required_setting(run_settings, "af3_tokamax_patch_path", "native_mps"),
+        "--output-dir",
+        output_dir,
+        "--json-path",
+        input_path,
+        "--num-diffusion-samples",
+        str(configured["af3_num_diffusion_samples"]),
+        "--num-recycles",
+        str(configured["af3_num_recycles"]),
+        "--timeout-seconds",
+        str(configured["af3_timeout_seconds"]),
+    ]
+    if run_data_pipeline:
+        command.append("--run-data-pipeline")
+    if db_dir:
+        command.extend(["--db-dir", _expanded_path(str(db_dir))])
+    if db_manifest:
+        command.extend(
+            ["--database-manifest", _expanded_path(str(db_manifest))]
+        )
+    return command, configured["af3_timeout_seconds"]
+
+
+def _singularity_af3_command(
+    input_path: str,
+    input_dir: str,
+    output_dir: str,
+    run_settings: dict,
+) -> list[str]:
+    """Builds the unchanged Linux/Singularity AF3 command."""
+    af3_repo_path = _required_setting(run_settings, "af3_repo_path", "singularity")
+    weights_path = _required_setting(run_settings, "af3_model_dir", "singularity")
+    databases_path = _required_setting(run_settings, "af3_db_dir", "singularity")
+    sif_path = _required_setting(run_settings, "af3_sif_path", "singularity")
+    return [
+        "singularity",
+        "exec",
+        "--nv",
+        "--env",
+        "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu",
+        "--bind",
+        f"{output_dir}:/root/af_output",
+        "--bind",
+        f"{input_dir}:/root/af_input",
+        "--bind",
+        f"{weights_path}:/root/models",
+        "--bind",
+        f"{databases_path}:/root/public_databases",
+        "--bind",
+        f"{af3_repo_path}:/root/alphafold3",
+        sif_path,
+        "python",
+        "/root/alphafold3/run_alphafold.py",
+        "--model_dir=/root/models",
+        "--db_dir=/root/public_databases",
+        f"--output_dir={output_dir}",
+        f"--json_path={input_path}",
+    ]
 
 
 def create_input_dict(
@@ -52,6 +311,15 @@ def create_input_dict(
     """
     if isinstance(target_chains, str):
         target_chains = target_chains.split(',')
+    if isinstance(target_seq, str):
+        target_sequences = [target_seq]
+    else:
+        target_sequences = list(target_seq)
+    if len(target_sequences) != len(target_chains):
+        raise ValueError(
+            "target_seq must contain one sequence per target chain: "
+            f"{len(target_sequences)} sequences for {len(target_chains)} chains."
+        )
         
     if isinstance(seed, int):
         seed = [seed]
@@ -67,13 +335,14 @@ def create_input_dict(
     for chain_id in [binder_chain] + target_chains:
         if chain_id != binder_chain:
             i = target_chains.index(chain_id)
+            chain_sequence = target_sequences[i]
+        else:
+            chain_sequence = binder_seq
         sequences.append(
             {
                 "protein": {
                     "id": [chain_id],
-                    "sequence": binder_seq if chain_id == binder_chain else target_seq[i],
-                    "unpairedMsa": "",
-                    "pairedMsa": "",
+                    "sequence": chain_sequence,
                 }
             }
         )
@@ -336,6 +605,16 @@ def generate_msas(
     Returns:
         dict: Updated input JSON with MSA paths added to each sequence.
     """
+    def set_unpaired_msa_path(sequence_info: dict, msa_path: str) -> None:
+        if not msa_path:
+            return
+        sequence_info["protein"]["unpairedMsaPath"] = msa_path
+        # AF3 requires a complete custom MSA/template specification. The
+        # existing target-MSA mode intentionally uses no paired MSA or
+        # templates for this chain.
+        sequence_info["protein"]["pairedMsa"] = ""
+        sequence_info["protein"]["templates"] = []
+
     updated_sequences = []
     for seq_idx, sequence_info in enumerate(input_json_data["sequences"]):
         chain = sequence_info["protein"]["id"][0]
@@ -347,7 +626,7 @@ def generate_msas(
             full_msa_path = os.path.join(output_dir, relative_msa_path)
 
             if os.path.exists(full_msa_path):
-                sequence_info["protein"]["unpairedMsaPath"] = relative_msa_path
+                set_unpaired_msa_path(sequence_info, relative_msa_path)
                 updated_sequences.append(sequence_info)
                 continue
         else:
@@ -371,7 +650,7 @@ def generate_msas(
                         os.makedirs(os.path.dirname(full_msa_path), exist_ok=True)
                         with open(full_msa_path, "w") as _f:
                             _f.writelines(new_lines)
-                        sequence_info["protein"]["unpairedMsaPath"] = relative_msa_path
+                        set_unpaired_msa_path(sequence_info, relative_msa_path)
                         updated_sequences.append(sequence_info)
                         continue
             # Skip binder MSA generation when mode is target-only (unless caching)
@@ -404,7 +683,7 @@ def generate_msas(
                 os.makedirs(os.path.dirname(cache_path), exist_ok=True)
                 shutil.copy(os.path.join(output_dir, relative_msa_path), cache_path)
 
-        sequence_info["protein"]["unpairedMsaPath"] = relative_msa_path
+        set_unpaired_msa_path(sequence_info, relative_msa_path)
 
         updated_sequences.append(sequence_info)
         if relative_msa_path != "":
@@ -415,6 +694,73 @@ def generate_msas(
             print(f"No MSA generated for {design_name} and sequence {seq_idx}")
     input_json_data["sequences"] = updated_sequences
     return input_json_data
+
+
+def _af3_output_paths(
+    output_dir: str, design_name: str, select_mode: str = "best"
+) -> tuple[str, str, str]:
+    """Locates AF3 structure and confidence outputs and fails closed if incomplete."""
+    design_name = design_name.lower()
+    af3_results_folder = os.path.join(output_dir, design_name)
+
+    if select_mode == "worst":
+        ranking_csv = os.path.join(
+            af3_results_folder, f"{design_name}_ranking_scores.csv"
+        )
+        if not os.path.isfile(ranking_csv):
+            raise FileNotFoundError(
+                f"AF3 ranking CSV was not produced: {ranking_csv}"
+            )
+        ranking_df = pd.read_csv(ranking_csv)
+        if ranking_df.empty or "ranking_score" not in ranking_df:
+            raise ValueError(
+                f"AF3 ranking CSV has no usable ranking_score rows: {ranking_csv}"
+            )
+        worst_row = ranking_df.loc[ranking_df["ranking_score"].idxmin()]
+        seed = int(worst_row["seed"])
+        sample = int(worst_row["sample"])
+        sample_subfolder = f"seed-{seed}_sample-{sample}"
+        sample_prefix = f"{design_name}_{sample_subfolder}"
+        sample_folder = os.path.join(af3_results_folder, sample_subfolder)
+        af3_structure = os.path.join(
+            sample_folder, f"{sample_prefix}_model.cif"
+        )
+        summary_confidences = os.path.join(
+            sample_folder, f"{sample_prefix}_summary_confidences.json"
+        )
+        full_confidences = os.path.join(
+            sample_folder, f"{sample_prefix}_confidences.json"
+        )
+        print(
+            f"Selected worst sample for {design_name}: {sample_subfolder} "
+            f"(ranking_score={worst_row['ranking_score']:.4f})"
+        )
+    elif select_mode == "best":
+        af3_structure = os.path.join(
+            af3_results_folder, f"{design_name}_model.cif"
+        )
+        summary_confidences = os.path.join(
+            af3_results_folder, f"{design_name}_summary_confidences.json"
+        )
+        full_confidences = os.path.join(
+            af3_results_folder, f"{design_name}_confidences.json"
+        )
+    else:
+        raise ValueError(
+            f"Unsupported AF3 select_mode={select_mode!r}; expected 'best' or 'worst'."
+        )
+
+    missing = [
+        path
+        for path in (af3_structure, summary_confidences, full_confidences)
+        if not os.path.isfile(path)
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "AF3 completed without the expected output artifacts. Missing: "
+            + ", ".join(missing)
+        )
+    return af3_structure, summary_confidences, full_confidences
 
 
 def extract_structure_and_scores(output_dir, design_name, binder_chain, select_mode="best"):
@@ -446,40 +792,9 @@ def extract_structure_and_scores(output_dir, design_name, binder_chain, select_m
     design_name = design_name.lower()
 
     af3_results_folder = os.path.join(output_dir, design_name)
-
-    if select_mode == "worst":
-        # Read ranking_scores.csv to find the worst (lowest ranking_score) sample
-        ranking_csv = os.path.join(
-            af3_results_folder, f"{design_name}_ranking_scores.csv"
-        )
-        ranking_df = pd.read_csv(ranking_csv)
-        worst_row = ranking_df.loc[ranking_df["ranking_score"].idxmin()]
-        seed = int(worst_row["seed"])
-        sample = int(worst_row["sample"])
-        sample_subfolder = f"seed-{seed}_sample-{sample}"
-        sample_prefix = f"{design_name}_{sample_subfolder}"
-        sample_folder = os.path.join(af3_results_folder, sample_subfolder)
-
-        af3_structure = os.path.join(sample_folder, f"{sample_prefix}_model.cif")
-        summary_confidences = os.path.join(
-            sample_folder, f"{sample_prefix}_summary_confidences.json"
-        )
-        full_confidences = os.path.join(
-            sample_folder, f"{sample_prefix}_confidences.json"
-        )
-        print(
-            f"Selected worst sample for {design_name}: {sample_subfolder} "
-            f"(ranking_score={worst_row['ranking_score']:.4f})"
-        )
-    else:
-        # Default: use top-level files (best sample, already selected by AF3)
-        af3_structure = os.path.join(af3_results_folder, f"{design_name}_model.cif")
-        summary_confidences = os.path.join(
-            af3_results_folder, f"{design_name}_summary_confidences.json"
-        )
-        full_confidences = os.path.join(
-            af3_results_folder, f"{design_name}_confidences.json"
-        )
+    af3_structure, summary_confidences, full_confidences = _af3_output_paths(
+        output_dir, design_name, select_mode=select_mode
+    )
 
     # Convert mmCIF structure file to PDB format for compatibility
     pdb_path = os.path.join(output_dir, f"{design_name}_af3.pdb")
@@ -520,7 +835,7 @@ def extract_structure_and_scores(output_dir, design_name, binder_chain, select_m
             text=True
         )
         ipsae_out_file = f"{os.path.dirname(os.path.abspath(af3_structure))}/{os.path.basename(af3_structure).replace('.cif','_10_10.txt')}"
-        df = pd.read_csv(ipsae_out_file, delim_whitespace=True)
+        df = pd.read_csv(ipsae_out_file, sep=r"\s+")
         ipsae_score = df['ipSAE'][len(df['ipSAE'])-1]
         pdockq2_score = df['pDockQ2'][len(df['pDockQ2'])-1]
         lis_score = df['LIS'][len(df['LIS'])-1]
@@ -544,10 +859,10 @@ def _run_af3(
     select_mode: str = "best",
 ) -> tuple:
     """
-    Execute AlphaFold3 structure prediction via Singularity container.
+    Execute AlphaFold3 through the platform-appropriate subprocess boundary.
 
-    Runs AF3 inference using the provided input JSON and configuration settings.
-    The function handles MSA generation, container execution, and result extraction.
+    macOS uses the validated native MPS runner in the dedicated AF3 environment.
+    Other platforms retain the existing Linux/Singularity execution path.
 
     Args:
         input_json (dict): AF3-compatible input JSON with sequence information.
@@ -584,54 +899,36 @@ def _run_af3(
             cache_binder_msa=run_settings.get("cache_binder_msa", False),
         )
 
-    # Write updated JSON for AF3
+    # Write the exact AF3 input consumed by either execution backend.
     with open(input_path, "w") as f:
-        json.dump(input_json, f)
+        json.dump(input_json, f, indent=2)
 
-    af3_repo_path = run_settings["af3_repo_path"]
-    weights_path = run_settings["af3_model_dir"]
-    databases_path = run_settings["af3_db_dir"]
-    sif_path = run_settings["af3_sif_path"]
+    execution_backend = _select_execution_backend(run_settings)
+    log_path = os.path.join(
+        input_dir, f"{input_json['name']}_af3_subprocess.log"
+    )
+    if execution_backend == "native_mps":
+        run_cmds, declared_timeout = _native_af3_command(
+            input_path, output_dir, run_settings
+        )
+        # The native runner enforces its own timeout and kills the complete AF3
+        # process group. The parent allows a small grace period for cleanup.
+        parent_timeout = declared_timeout + 30
+    else:
+        run_cmds = _singularity_af3_command(
+            input_path, input_dir, output_dir, run_settings
+        )
+        parent_timeout = run_settings.get("af3_singularity_timeout_seconds")
+        if parent_timeout is not None:
+            parent_timeout = float(parent_timeout)
+            if parent_timeout <= 0:
+                raise AF3ConfigurationError(
+                    "af3_singularity_timeout_seconds must be > 0 when set."
+                )
 
-    run_cmds = [
-        "singularity",
-        "exec",
-        "--nv",
-        "--env",
-        "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu",
-        "--bind",
-        f"{output_dir}:/root/af_output",
-        "--bind",
-        f"{input_dir}:/root/af_input",
-        "--bind",
-        f"{weights_path}:/root/models",
-        "--bind",
-        f"{databases_path}:/root/public_databases",
-        "--bind",
-        f"{af3_repo_path}:/root/alphafold3",
-        sif_path,
-        "python",
-        "/root/alphafold3/run_alphafold.py",
-        "--model_dir=/root/models",
-        "--db_dir=/root/public_databases",
-        f"--output_dir={output_dir}",
-        f"--json_path={input_path}",
-    ]
-
-    popen = subprocess.Popen(
-        run_cmds,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        universal_newlines=True,
-    ) 
-    for line in popen.stdout:
-        continue
-
-    popen.stdout.close()
-    return_code = popen.wait()
-
-    if return_code:
-        raise subprocess.CalledProcessError(return_code, run_cmds)
+    _run_logged_subprocess(
+        run_cmds, log_path=log_path, timeout_seconds=parent_timeout
+    )
 
     pdb_path, scores, ipsae = extract_structure_and_scores(
         output_dir, input_json["name"], binder_chain, select_mode=select_mode
@@ -642,7 +939,7 @@ def _run_af3(
 
 def run_af3(
     binder_seq: str,
-    target_seq: str,
+    target_seq: Union[str, List[str]],
     target_chains: Union[List[str], str],
     output_dir: str,
     design_name: str,
@@ -667,10 +964,19 @@ def run_af3(
         design_name (str): Unique identifier for this design.
         seed (Union[int, List[int]]): Random seed(s) for reproducible predictions.
         run_settings (dict): Configuration containing AF3 paths and MSA settings:
-            - af3_repo_path: Path to AlphaFold3 repository
-            - af3_sif_path: Path to AF3 Singularity image
+            - af3_execution_backend: "auto", "native_mps", or "singularity"
+            - af3_repo_path: Path to the pinned AlphaFold3 repository
+            - af3_sif_path: Path to AF3 Singularity image (Linux only)
             - af3_model_dir: Path to AF3 model weights
             - af3_db_dir: Path to AF3 public databases
+            - af3_python_path: Dedicated AF3 interpreter (macOS only)
+            - af3_tools_bin_dir: HMMER tools directory (macOS only)
+            - af3_tokamax_patch_path: Reversible MPS precision patch
+            - af3_database_manifest: Optional explicit database path map
+            - af3_run_data_pipeline: Whether AF3 database search runs
+            - af3_num_diffusion_samples: AF3 diffusion sample count
+            - af3_num_recycles: AF3 recycle count
+            - af3_timeout_seconds: Native AF3 subprocess timeout
             - msa_db_dir: Path to ColabFold MSA databases
             - use_metagenomic_db: Whether to use metagenomic databases
         binder_chain (str, optional): Chain ID for binder protein. Defaults to 'B'.
@@ -729,6 +1035,17 @@ def main(
     af3_model_dir: str,
     af3_db_dir: str,
     use_metagenomic_db: bool,
+    af3_execution_backend: str = "auto",
+    af3_expected_revision: str = AF3_EXPECTED_REVISION,
+    af3_python_path: str | None = None,
+    af3_tools_bin_dir: str | None = None,
+    af3_runner_path: str | None = None,
+    af3_tokamax_patch_path: str | None = None,
+    af3_database_manifest: str | None = None,
+    af3_run_data_pipeline: bool = True,
+    af3_num_diffusion_samples: int = 5,
+    af3_num_recycles: int = 10,
+    af3_timeout_seconds: float = 3600,
 ):
     print("Running AF3...")
 
@@ -746,9 +1063,20 @@ def main(
                     "af3_sif_path": af3_sif_path,
                     "af3_model_dir": af3_model_dir,
                     "af3_db_dir": af3_db_dir,
+                    "af3_execution_backend": af3_execution_backend,
+                    "af3_expected_revision": af3_expected_revision,
+                    "af3_python_path": af3_python_path,
+                    "af3_tools_bin_dir": af3_tools_bin_dir,
+                    "af3_runner_path": af3_runner_path,
+                    "af3_tokamax_patch_path": af3_tokamax_patch_path,
+                    "af3_database_manifest": af3_database_manifest,
+                    "af3_run_data_pipeline": af3_run_data_pipeline,
+                    "af3_num_diffusion_samples": af3_num_diffusion_samples,
+                    "af3_num_recycles": af3_num_recycles,
+                    "af3_timeout_seconds": af3_timeout_seconds,
                     "use_metagenomic_db": use_metagenomic_db,
                 }
-                pdb_path, scores = _run_af3(
+                pdb_path, scores, _ = _run_af3(
                     input_json_dict,
                     output_dir,
                     binder_chain=binder_chain,
@@ -779,9 +1107,20 @@ def main(
                 "af3_sif_path": af3_sif_path,
                 "af3_model_dir": af3_model_dir,
                 "af3_db_dir": af3_db_dir,
+                "af3_execution_backend": af3_execution_backend,
+                "af3_expected_revision": af3_expected_revision,
+                "af3_python_path": af3_python_path,
+                "af3_tools_bin_dir": af3_tools_bin_dir,
+                "af3_runner_path": af3_runner_path,
+                "af3_tokamax_patch_path": af3_tokamax_patch_path,
+                "af3_database_manifest": af3_database_manifest,
+                "af3_run_data_pipeline": af3_run_data_pipeline,
+                "af3_num_diffusion_samples": af3_num_diffusion_samples,
+                "af3_num_recycles": af3_num_recycles,
+                "af3_timeout_seconds": af3_timeout_seconds,
                 "use_metagenomic_db": use_metagenomic_db,
             }
-            pdb_path, scores = _run_af3(
+            pdb_path, scores, _ = _run_af3(
                 input_json_data,
                 output_dir,
                 binder_chain=binder_chain,
@@ -840,6 +1179,17 @@ if __name__ == "__main__":
         "--af3_repo_path", required=False, help="Path to local AlphaFold3 repo to bind."
     )
     parser.add_argument(
+        "--af3_execution_backend",
+        default="auto",
+        choices=["auto", "native_mps", "singularity"],
+        help="AF3 execution backend. auto uses native MPS on macOS.",
+    )
+    parser.add_argument(
+        "--af3_expected_revision",
+        default=AF3_EXPECTED_REVISION,
+        help="Required AF3 Git commit for native MPS execution.",
+    )
+    parser.add_argument(
         "--af3_sif_path",
         required=False,
         help="Path to the AlphaFold3 Singularity image (.sif).",
@@ -849,6 +1199,44 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--af3_db_dir", required=False, help="Path to AF3 public databases directory."
+    )
+    parser.add_argument(
+        "--af3_python_path",
+        required=False,
+        help="Interpreter in the dedicated AF3 environment (native macOS).",
+    )
+    parser.add_argument(
+        "--af3_tools_bin_dir",
+        required=False,
+        help="Directory containing native HMMER tools (native macOS).",
+    )
+    parser.add_argument(
+        "--af3_runner_path",
+        required=False,
+        help="Path to scripts/run_af3_mps.py.",
+    )
+    parser.add_argument(
+        "--af3_tokamax_patch_path",
+        required=False,
+        help="Path to the reversible Tokamax MPS precision patch.",
+    )
+    parser.add_argument(
+        "--af3_database_manifest",
+        required=False,
+        help="Optional JSON mapping of all nine explicit AF3 database paths.",
+    )
+    parser.add_argument(
+        "--af3_run_data_pipeline",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether native AF3 runs MSA/template database search.",
+    )
+    parser.add_argument(
+        "--af3_num_diffusion_samples", type=int, default=5
+    )
+    parser.add_argument("--af3_num_recycles", type=int, default=10)
+    parser.add_argument(
+        "--af3_timeout_seconds", type=float, default=3600
     )
     parser.add_argument(
         "--use_metagenomic_db",
@@ -868,4 +1256,15 @@ if __name__ == "__main__":
         af3_model_dir=args.af3_model_dir,
         af3_db_dir=args.af3_db_dir,
         use_metagenomic_db=args.use_metagenomic_db,
+        af3_execution_backend=args.af3_execution_backend,
+        af3_expected_revision=args.af3_expected_revision,
+        af3_python_path=args.af3_python_path,
+        af3_tools_bin_dir=args.af3_tools_bin_dir,
+        af3_runner_path=args.af3_runner_path,
+        af3_tokamax_patch_path=args.af3_tokamax_patch_path,
+        af3_database_manifest=args.af3_database_manifest,
+        af3_run_data_pipeline=args.af3_run_data_pipeline,
+        af3_num_diffusion_samples=args.af3_num_diffusion_samples,
+        af3_num_recycles=args.af3_num_recycles,
+        af3_timeout_seconds=args.af3_timeout_seconds,
     )

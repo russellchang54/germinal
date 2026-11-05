@@ -30,6 +30,7 @@ def run_filters(
     multi_relax: bool = False,
     select_mode: str = "best",
     af3_seed_size: int = 5,
+    seed: int | None = None,
 ) -> Tuple[dict, dict, bool, str]:
     """Run filters and compute metrics for a single design trajectory.
 
@@ -134,7 +135,9 @@ def run_filters(
         external_relaxed_pdb = os.path.join(
             structures_directory, trajectory.design_name + "_relaxed.pdb"
         )
-        pyrosetta_utils.pr_relax(external_pdb, external_relaxed_pdb)
+        pyrosetta_utils.pr_relax(
+            external_pdb, external_relaxed_pdb, seed=seed
+        )
 
         # ========================== Calculate Clashes ==========================
         clash_threshold = run_settings["clash_threshold"]

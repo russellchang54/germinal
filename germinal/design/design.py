@@ -668,11 +668,13 @@ def add_beta_strand_loss(self, weight=0):
         mask_2d = mask_2d.at[pos - 1].set(1).at[pos + 1].set(1)
         mask_2d = jnp.outer(mask_2d, mask_2d)
 
-        loss_array = jnp.sort(jnp.diagonal(mask_2d * x, 3), descending=True)
-        top_k_mask = jnp.arange(loss_array.size) < (pos.size // 3)
-        beta_loss = jnp.where(top_k_mask, loss_array, 0).sum(-1) / (
-            top_k_mask.sum() + 1e-8
-        )
+        diagonal = jnp.diagonal(mask_2d * x, 3)
+        top_k_count = pos.size // 3
+        if top_k_count == 0:
+            beta_loss = jnp.asarray(0.0, dtype=diagonal.dtype)
+        else:
+            selected_values, _ = jax.lax.top_k(diagonal, top_k_count)
+            beta_loss = selected_values.sum(-1) / (top_k_count + 1e-8)
 
         return {"beta_strand": beta_loss}
 

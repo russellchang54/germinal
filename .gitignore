@@ -5,6 +5,8 @@ jobs/
 build/
 outputs/
 __pycache__/
+.cache/
+.envs/
 
 **/.DS_Store
 *.pyc

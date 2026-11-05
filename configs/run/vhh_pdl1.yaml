@@ -65,10 +65,21 @@ msa_mode: "target"
 af3_structure_select_mode: "worst"
 
 # AF3 configuration (required when structure_model == "af3")
+af3_execution_backend: "auto"  # auto | native_mps | singularity
+af3_expected_revision: "8f8ac383afba995f5953182d39a560ffb8bbbfd3"
 af3_repo_path: null
 af3_sif_path: null
 af3_model_dir: null
 af3_db_dir: null
+af3_python_path: null
+af3_tools_bin_dir: null
+af3_runner_path: "scripts/run_af3_mps.py"
+af3_tokamax_patch_path: "docs/porting/af3_mps_probe/patches/tokamax-0.0.12-mps-f32.patch"
+af3_database_manifest: null
+af3_run_data_pipeline: true
+af3_num_diffusion_samples: 5
+af3_num_recycles: 10
+af3_timeout_seconds: 3600
 msa_db_dir: null
 use_metagenomic_db: false
 # Cache binder MSA across designs (AF3 only). Requires msa_mode="colabfold";

@@ -665,8 +665,11 @@ def score_interface_ensemble(
 
 
 # Relax designed structure
-def pr_relax(pdb_file, relaxed_pdb_path):
+def pr_relax(pdb_file, relaxed_pdb_path, seed=None):
     if not os.path.exists(relaxed_pdb_path):
+        if seed is not None:
+            pr.rosetta.numeric.random.rg().set_seed(int(seed))
+
         # Generate pose
         pose = pr.pose_from_pdb(pdb_file)
         start_pose = pose.clone()

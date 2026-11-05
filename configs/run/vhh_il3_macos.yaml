@@ -1,0 +1,30 @@
+# @package _global_
+# Native Apple Silicon AF3 variant of the validated VHH/IL3 configuration.
+
+defaults:
+  - vhh_il3
+  - _self_
+
+# Execution boundary only. Scientific optimization and filter settings inherit
+# unchanged from vhh_il3.yaml.
+af2_python_path: ".envs/af2-mps-0109/bin/python"
+abmpnn_python_path: ".envs/abmpnn-mps-0111/bin/python"
+abmpnn_expected_jax_mps_version: "0.10.11"
+abmpnn_preserve_worker_logs: true
+af3_execution_backend: "native_mps"
+af3_expected_revision: "8f8ac383afba995f5953182d39a560ffb8bbbfd3"
+af3_repo_path: ".envs/af3-mps-probe/share/af3-src"
+af3_model_dir: ".envs/af3-mps-probe/share/af3-models"
+af3_db_dir: "/Volumes/990Pro/database"
+af3_database_manifest: null
+af3_python_path: ".envs/af3-mps-probe/bin/python"
+af3_tools_bin_dir: ".envs/af3-mps-tools/bin"
+af3_runner_path: "scripts/run_af3_mps.py"
+af3_tokamax_patch_path: "docs/porting/af3_mps_probe/patches/tokamax-0.0.12-mps-f32.patch"
+af3_run_data_pipeline: true
+af3_num_diffusion_samples: 5
+af3_num_recycles: 10
+af3_timeout_seconds: 7200
+
+# Linux must continue using run=vhh_il3 and the existing Singularity path.
+# This configuration intentionally rejects native_mps on non-Darwin hosts.
